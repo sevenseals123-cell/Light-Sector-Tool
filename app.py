@@ -1,102 +1,76 @@
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
-# Configuration de la page
-st.set_page_config(page_title="Maritime Sector Light Tool", layout="wide")
+st.set_page_config(page_title="NWM - Pointe NEGRI Sector Tool", layout="wide")
 
-st.title("⚓ Déterminateur de Secteurs de Feu Portuaire")
-st.markdown("""
-Cette application permet de définir les secteurs d'un feu à partir des points d'occlusion 
-relevés par rapport au **Nord Vrai**.
-""")
+st.title("⚓ Application de Pilotage - Pointe NEGRI (NWM)")
+st.caption("Basé sur la Note de Calcul GISMAN 25-2879 - Rev D")
 
-# --- BARRE LATÉRALE : CONFIGURATION ---
-st.sidebar.header("Paramètres du Feu")
-nom_feu = st.sidebar.text_input("Nom du fanal / balise", "Feu de Jetée")
-incertitude = st.sidebar.slider("Zone de pénombre (degrés)", 0.0, 5.0, 0.5)
-mode_vue = st.sidebar.radio("Relèvements saisis depuis :", 
-                             ["Le navire (vers le feu)", "Le feu (vers le large)"])
+# --- MODULE 1 : CALCUL DE PORTÉE (Section 3 du doc) ---
+st.sidebar.header("📏 Calcul de Portée (AISM)")
+ho = st.sidebar.number_input("Hauteur de l'œil (ho) en m", value=25.0) # 
+Hm = st.sidebar.number_input("Plan focal du feu (Hm) en m", value=51.2) # 
 
-# --- CORPS DE L'APPLICATION ---
+# Formule AISM du document : Rg = 2.03 * (sqrt(ho) + sqrt(Hm))
+rg = 2.03 * (np.sqrt(ho) + np.sqrt(Hm)) # 
+
+st.sidebar.metric("Portée Géographique (Rg)", f"{rg:.1f} NM")
+st.sidebar.write(f"Note: Portée nominale requise: 12 NM") # [cite: 35]
+
+# --- MODULE 2 : SECTEURS D'OCCLUSION (Section 4.1 du doc) ---
+st.header("🚫 Analyse des Secteurs d'Occlusion")
+
+# Données extraites du tableau de la page 4 
+occlusions_predefinies = [
+    {"Label": "Bâtiment 1", "Amplitude": 13.21, "Distance": 0.54, "Couleur": "orange"},
+    {"Label": "Bâtiment 2 (Marine Royale)", "Amplitude": 4.83, "Distance": 0.52, "Couleur": "red"},
+    {"Label": "Radar MR", "Amplitude": 0.95, "Distance": 1.01, "Couleur": "blue"}
+]
+
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("Saisie des secteurs")
-    nb_secteurs = st.number_input("Nombre de secteurs à définir", 1, 6, 3)
-    
-    secteurs_data = []
-    couleurs_map = {"Blanc": "yellow", "Rouge": "red", "Vert": "green", "Obscurci": "gray"}
-
-    for i in range(nb_secteurs):
-        st.write(f"**Secteur {i+1}**")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            debut = st.number_input(f"Début (°)", 0.0, 360.0, key=f"d{i}")
-        with c2:
-            fin = st.number_input(f"Fin (°)", 0.0, 360.0, key=f"f{i}")
-        with c3:
-            coul = st.selectbox("Couleur", list(couleurs_map.keys()), key=f"c{i}")
+    st.subheader("Configuration des Secteurs")
+    # On permet à l'utilisateur de positionner ces secteurs sur le compas
+    secteurs_pilote = []
+    for occ in occlusions_predefinies:
+        st.write(f"**{occ['Label']}** (Étude: {occ['Amplitude']}°)")
+        centre = st.number_input(f"Relèvement central pour {occ['Label']} (°)", 0.0, 360.0, key=occ['Label'])
         
-        # Conversion si saisie depuis le navire
-        if mode_vue == "Le navire (vers le feu)":
-            d_calc = (debut + 180) % 360
-            f_calc = (fin + 180) % 360
-        else:
-            d_calc, f_calc = debut, fin
-
-        secteurs_data.append({
-            "debut": d_calc,
-            "fin": f_calc,
-            "couleur": couleurs_map[coul],
-            "label": coul
+        secteurs_pilote.append({
+            "debut": (centre - occ['Amplitude']/2) % 360,
+            "fin": (centre + occ['Amplitude']/2) % 360,
+            "couleur": occ['Couleur'],
+            "label": occ['Label']
         })
 
 with col2:
-    st.subheader("Visualisation Radar (Vue du ciel)")
-    
+    # Visualisation Radar
     fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(6,6))
     ax.set_theta_zero_location("N")
-    ax.set_theta_direction(-1) # Sens horaire
+    ax.set_theta_direction(-1)
 
-    for s in secteurs_data:
+    for s in secteurs_pilote:
         start_rad = np.radians(s['debut'])
         end_rad = np.radians(s['fin'])
-        
-        # Gestion du passage par le Nord (360/0)
-        if end_rad < start_rad:
-            width = (2 * np.pi - start_rad) + end_rad
-        else:
-            width = end_rad - start_rad
-            
-        # Dessin du secteur
-        ax.bar(start_rad, 1, width=width, color=s['couleur'], 
-               alpha=0.5, align='edge', edgecolor='black', label=s['label'])
-        
-        # Dessin de la pénombre (incertitude)
-        pen_rad = np.radians(incertitude)
-        ax.bar(start_rad - pen_rad/2, 1, width=pen_rad, color='black', alpha=0.2, align='edge')
-        ax.bar(end_rad - pen_rad/2, 1, width=pen_rad, color='black', alpha=0.2, align='edge')
+        width = (end_rad - start_rad) % (2 * np.pi)
+        ax.bar(start_rad, 1, width=width, color=s['couleur'], alpha=0.6, align='edge', label=s['label'])
 
-    ax.set_yticklabels([]) # Cacher les cercles de distance
-    ax.set_xticks(np.radians(np.arange(0, 360, 45)))
-    ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'])
-    
+    ax.set_yticklabels([])
+    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
     st.pyplot(fig)
 
-# --- TABLEAU RÉCAPITULATIF ---
+# --- MODULE 3 : COORDONNÉES DES ZONES (Section 4.2) ---
 st.divider()
-st.subheader("Tableau de bord des secteurs (Relèvements Vrais)")
-res_data = []
-for s in secteurs_data:
-    arc = (s['fin'] - s['debut']) % 360
-    res_data.append({
-        "Secteur": s['label'],
-        "De (Nv)": f"{s['debut']:.1f}°",
-        "À (Nv)": f"{s['fin']:.1f}°",
-        "Amplitude": f"{arc:.1f}°"
-    })
-
-st.table(res_data)
-
-st.info(f"Note : Les points d'occlusion incluent une marge de pénombre de ±{incertitude}°.")
+st.subheader("📍 Coordonnées des Zones d'Occlusion (Estimation)")
+# [cite: 72, 74, 76, 79, 82, 84, 85, 86]
+data_coords = {
+    "Zone": ["Zone B", "Zone B", "Zone B", "Zone B", "Zone R", "Zone R", "Zone R", "Zone R"],
+    "Point": ["OCC 4", "OCC 1", "OCC 2", "OCC 3", "OCC rad1", "OCC rad2", "OCC rad3", "OCC rad4"],
+    "Latitude": ["35°17'04.91\"N", "35°17'29.12\"N", "35°17'21.14\"N", "35°17'03.31\"N", "35°17'26.11\"N", "35°17'50.37\"N", "35°17'49.35\"N", "35°17'25.49\"N"],
+    "Longitude": ["3°08'02.44\"W", "3°08'13.78\"W", "3°08'28.41\"W", "3°08'05.91\"W", "3°08'19.26\"W", "3°08'36.71\"W", "3°08'38.87\"W", "3°08'20.42\"W"]
+}
+st.table(pd.DataFrame(data_coords))
+st.warning("⚠️ Les coordonnées sont estimées. GISMAN recommande des relevés in-situ[cite: 99].")
